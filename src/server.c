@@ -14,6 +14,24 @@ void *get_in_addr(struct sockaddr *sa) {
     }
 }
 
+int sendall(int fd, char *buf, int *len) {
+    int total = 0;
+    int bytes_left = *len;
+    int n;
+
+    while(total < *len) {
+        n = send(fd, buf+total, bytes_left, 0);
+        if (n == -1) {
+            break;
+        }
+        total += n;
+        bytes_left -= n;
+    }
+
+    *len = total;
+    return (n == -1 ? -1 : 0);
+}
+
 int main() {
     int sockfd, acceptfd;
     struct addrinfo hints, *servinfo, *p;
@@ -96,7 +114,8 @@ int main() {
         if (!fork()) {
             close(sockfd);
             char *buf = "THE INDOMINABLE HUMAN SPIRIT!\n";
-            int sock_send = send(acceptfd, buf, strlen(buf), 0);
+            int buf_len = strlen(buf);
+            int sock_send = sendall(acceptfd, buf, &buf_len);
             if (sock_send == -1) {
                 perror("server: send");
             }

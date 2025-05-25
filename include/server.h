@@ -16,3 +16,4 @@
 
 void sigchld_handler();
 void *get_in_addr(struct sockaddr *sa);
+int sendall(int fd, char *buf, int *len);
