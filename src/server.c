@@ -32,6 +32,24 @@ int sendall(int fd, char *buf, int *len) {
     return (n == -1 ? -1 : 0);
 }
 
+void add_to_pfds(struct pollfd *pfds[], int newfd, int *fd_count, int *fd_size) {
+    if (*fd_count == *fd_size) {
+        *fd_size *= 2;
+        *pfds = realloc(*pfds, sizeof(**pfds) * (*fd_size));
+    }
+
+    (*pfds)[*fd_count].fd = newfd;
+    (*pfds)[*fd_count].events = POLLIN;
+    (*pfds)[*fd_count].revents = 0;
+
+    (*fd_count)++;
+}
+
+void del_from_pfds(struct pollfd pfds[], int i, int *fd_count) {
+    pfds[i] = pfds[*fd_count-1];
+    (*fd_count)--;
+}
+
 int main() {
     int sockfd, acceptfd;
     struct addrinfo hints, *servinfo, *p;
@@ -41,6 +59,11 @@ int main() {
     struct sockaddr_storage conn_addrinfo;
     socklen_t sin_size;
     char s[INET6_ADDRSTRLEN];
+    
+    // Poll variables
+    struct pollfd *pfds = malloc(sizeof(struct pollfd) * INITIAL_FD_SIZE);
+    int fd_count = 0;
+    int fd_size = INITIAL_FD_SIZE;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -49,7 +72,7 @@ int main() {
 
     rv = getaddrinfo(NULL, PORT, &hints, &servinfo);
     if (rv != 0) {
-        fprintf(stderr, "getaddeinfo: %s\n", gai_strerror(rv));
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return 1;
     }
 
@@ -98,33 +121,85 @@ int main() {
         exit(1);
     }
 
+    // Add the server socket to the poll set
+    add_to_pfds(&pfds, sockfd, &fd_count, &fd_size);
+
     printf("server waiting for connection\n");
 
     while(1) {
-        sin_size = sizeof(conn_addrinfo);
-        acceptfd = accept(sockfd, (struct sockaddr *)&conn_addrinfo, &sin_size);
-        if (acceptfd == -1) {
-            perror("server: accept");
+        int poll_count = poll(pfds, fd_count, -1);
+
+        if (poll_count == -1) {
+            perror("poll");
             exit(1);
         }
 
-        inet_ntop(conn_addrinfo.ss_family, get_in_addr((struct sockaddr *)&conn_addrinfo), s, sizeof(s));
-        printf("server got connection from %s\n", s);
+        for (int i = 0; i < fd_count; i++) {
+            if (pfds[i].revents == 0)
+                continue;
 
-        if (!fork()) {
-            close(sockfd);
-            char *buf = "THE INDOMINABLE HUMAN SPIRIT!\n";
-            int buf_len = strlen(buf);
-            int sock_send = sendall(acceptfd, buf, &buf_len);
-            if (sock_send == -1) {
-                perror("server: send");
+            if (pfds[i].revents & POLLIN) {
+                if (pfds[i].fd == sockfd) {
+                    // Handle new connection
+                    sin_size = sizeof(conn_addrinfo);
+                    acceptfd = accept(sockfd, (struct sockaddr *)&conn_addrinfo, &sin_size);
+                    if (acceptfd == -1) {
+                        perror("accept");
+                        continue;
+                    }
+
+                    inet_ntop(conn_addrinfo.ss_family,
+                            get_in_addr((struct sockaddr *)&conn_addrinfo),
+                            s, sizeof(s));
+                    printf("server got connection from %s\n", s);
+
+                    // Add the new connection to our poll set
+                    add_to_pfds(&pfds, acceptfd, &fd_count, &fd_size);
+
+                    // --- Send response immediately after accepting ---
+                    char *response = "THE INDOMINABLE HUMAN SPIRIT!\r\n";
+                    int response_len = strlen(response);
+                    int sock_send = sendall(acceptfd, response, &response_len);
+                    if (sock_send == -1) {
+                        perror("send");
+                    } else {
+                        printf("Sent %d bytes to client\n", sock_send);
+                    }
+                    // --- (Optional: Close connection after sending) ---
+                    // close(acceptfd);
+                    // del_from_pfds(pfds, fd_count - 1, &fd_count);
+                }
+                else {
+                    // (Optional: If you still want to handle client data later)
+                    char buf[256];
+                    int len = recv(pfds[i].fd, buf, sizeof(buf), 0);
+                    if (len <= 0) {
+                        if (len == 0) {
+                            printf("socket %d hung up\n", pfds[i].fd);
+                        } else {
+                            perror("recv");
+                        }
+                        close(pfds[i].fd);
+                        del_from_pfds(pfds, i, &fd_count);
+                        i--;
+                    }
+                }
             }
-            // shutdown(acceptfd, 2); // same as close 0->receive 1->send
-            // dont know why shutdown gave an error, will try to find why
-            close(acceptfd);
-            exit(0);
+            else if (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                printf("Error on socket %d\n", pfds[i].fd);
+                close(pfds[i].fd);
+                del_from_pfds(pfds, i, &fd_count);
+                i--;
+            }
         }
-        close(acceptfd);
     }
+
+    // clean up
+    for (int i = 0; i < fd_count; i++) {
+        if (pfds[i].fd >= 0)
+            close(pfds[i].fd);
+    }
+    free(pfds);
+
     return 0;
 }

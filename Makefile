@@ -12,15 +12,11 @@ all: $(BINARY)
 
 $(BINARY):
 	$(CC) $(CFLAGS) $(CFILES) -o $@
-
-$(BINARY2):
-	$(CC) $(CFLAGS) $(CFILES2) -o $@
+	$(CC) $(CFLAGS) $(CFILES2) -o $(BINARY2)
 
 run:
 	$(BINARY)
 
 clean:
 	rm -f $(BINARY)
-
-del:
 	rm -f $(BINARY2)
