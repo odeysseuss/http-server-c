@@ -49,6 +49,32 @@ void del_from_pfds(struct pollfd pfds[], int i, int *fd_count) {
     (*fd_count)--;
 }
 
+// --- HTTP Request-Response ---
+
+const char* get_mime_type(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+
+    if (strcmp(dot, ".html") == 0) return "text/html";
+    if (strcmp(dot, ".css") == 0) return "text/css";
+    if (strcmp(dot, ".js") == 0) return "application/javascript";
+    if (strcmp(dot, ".jpg") == 0 || strcmp(dot, ".jpeg") == 0) return "image/jpeg";
+    if (strcmp(dot, ".png") == 0) return "image/png";
+    if (strcmp(dot, ".gif") == 0) return "image/gif";
+    if (strcmp(dot, ".ico") == 0) return "image/x-icon";
+    if (strcmp(dot, ".json") == 0) return "application/json";
+    if (strcmp(dot, ".pdf") == 0) return "application/pdf";
+
+    return "text/plain";
+}
+// int parse_http_request(const char *req, http_request *header);
+// void init_response_header(http_response *header, int status_code, const char *status_text);
+// void build_response_header(http_response *header, char *buf, size_t buf_size);
+// void send_http_response(int client_fd, http_response *header, const char *body);
+// void handle_get(int client_fd, http_request *header);
+// const char *get_content_type(const char *path);
+// void send_err(int client_fd, int status_code, const char *text);
+
 // --- Server Initialization ---
 
 int setup_server_socket() {
