@@ -1,3 +1,6 @@
+#ifndef CLIENT_H
+#define CLIENT_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -14,3 +17,5 @@
 #define MAX_DATA_SIZE 100
 
 void *get_in_addr(struct sockaddr *sa);
+
+#endif // !CLIENT_H

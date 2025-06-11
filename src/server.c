@@ -1,5 +1,8 @@
 #include "../include/server.h"
 
+// --- SSL/TLS Global Variables ---
+SSL_CTX *ssl_ctx = NULL;
+
 // --- Helper Functions ---
 
 void sigchld_handler() {
@@ -73,21 +76,21 @@ void build_response_header(http_response *res, char *buf, size_t buf_size) {
     }
 }
 
-void send_http_response(int client_fd, http_response *res, const char *body) {
+void send_http_response(SSL *ssl, http_response *res, const char *body) {
     char headers[MAX_HEADER_SIZE];
     build_response_header(res, headers, sizeof(headers));
-    send(client_fd, headers, strlen(headers), 0);
-    if (body) send(client_fd, body, strlen(body), 0);
+    SSL_write(ssl, headers, strlen(headers));
+    if (body) SSL_write(ssl, body, strlen(body));
 }
 
-void send_err(int client_fd, int status_code, const char *text) {
+void send_err(SSL *ssl, int status_code, const char *text) {
     http_response res;
     init_response_header(&res, status_code, text);
     add_response_header(&res, "Content-Type", "text/plain");
-    send_http_response(client_fd, &res, text);
+    send_http_response(ssl, &res, text);
 }
 
-void handle_get(int client_fd, http_request *req) {
+void handle_get(SSL *ssl, http_request *req) {
     // Extract path without query parameters
     char path[256] = {0};
     char *query_start = strchr(req->path, '?');
@@ -110,14 +113,14 @@ void handle_get(int client_fd, http_request *req) {
 
     // Security check
     if (strstr(path, "..") != NULL) {
-        send_err(client_fd, 403, "Forbidden");
+        send_err(ssl, 403, "Forbidden");
         return;
     }
 
     // Open the requested file
     FILE *file = fopen(full_path, "rb");
     if (!file) {
-        send_err(client_fd, 404, "Not Found");
+        send_err(ssl, 404, "Not Found");
         return;
     }
 
@@ -126,13 +129,13 @@ void handle_get(int client_fd, http_request *req) {
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    // Prepare response - ONLY INIT HEADERS HERE
+    // Prepare response
     http_response res;
     init_response_header(&res, 200, "OK");
     add_response_header(&res, "Content-Type", get_mime_type(path));
     add_response_header(&res, "Access-Control-Allow-Origin", "*");
 
-    // Set content length - ONLY ONCE
+    // Set content length
     char content_length[32];
     snprintf(content_length, sizeof(content_length), "%ld", file_size);
     add_response_header(&res, "Content-Length", content_length);
@@ -140,14 +143,14 @@ void handle_get(int client_fd, http_request *req) {
     // Send headers
     char headers[MAX_HEADER_SIZE];
     build_response_header(&res, headers, sizeof(headers));
-    send(client_fd, headers, strlen(headers), 0);
+    SSL_write(ssl, headers, strlen(headers));
 
     // Send file content in chunks
     char buffer[BUF_SIZE];
     size_t bytes_read;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (send(client_fd, buffer, bytes_read, 0) < 0) {
-            perror("send");
+        if (SSL_write(ssl, buffer, bytes_read) <= 0) {
+            perror("SSL_write");
             break;
         }
     }
@@ -232,89 +235,43 @@ int setup_server_socket() {
 }
 
 void handle_client_data(int client_fd) {
+    SSL *ssl = SSL_new(ssl_ctx);
+    SSL_set_fd(ssl, client_fd);
+
+    if (SSL_accept(ssl) <= 0) {
+        ERR_print_errors_fp(stderr);
+        goto cleanup;
+    }
+
     char buf[BUF_SIZE];
-    ssize_t len = recv(client_fd, buf, sizeof(buf)-1, 0);
+    ssize_t len = SSL_read(ssl, buf, sizeof(buf)-1);
 
     if (len <= 0) {
-        if (len == 0) {
+        int err = SSL_get_error(ssl, len);
+        if (err == SSL_ERROR_ZERO_RETURN) {
             printf("Client disconnected\n");
         } else {
-            perror("recv");
+            fprintf(stderr, "SSL read error: %d\n", err);
         }
-        close(client_fd);
-        return;
+        goto cleanup;
     }
 
     buf[len] = '\0';
 
     http_request req;
     if (parse_http_request(buf, &req) == -1) {
-        send_err(client_fd, 400, "Bad Request");
-        close(client_fd);
-        return;
+        send_err(ssl, 400, "Bad Request");
+        goto cleanup;
     }
 
     if (strcmp(req.method, "GET") == 0) {
-        handle_get(client_fd, &req);
+        handle_get(ssl, &req);
     } else {
-        send_err(client_fd, 501, "Not Implemented");
+        send_err(ssl, 501, "Not Implemented");
     }
 
+cleanup:
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
     close(client_fd);
-}
-
-int main() {
-    int sockfd = setup_server_socket();
-    if (sockfd == -1) {
-        fprintf(stderr, "Failed to start server\n");
-        return 1;
-    }
-
-    // Set up signal handler
-    struct sigaction sa;
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-        perror("sigaction");
-        exit(1);
-    }
-
-    // Get local IP address
-    char hostname[256];
-    gethostname(hostname, sizeof(hostname));
-    struct hostent *host = gethostbyname(hostname);
-
-    printf("Server running at:\n");
-    printf("Local:  http://localhost:%s\n", PORT);
-    printf("LAN:    http://%s:%s\n", inet_ntoa(*(struct in_addr*)host->h_addr), PORT);
-    printf("Remote: http://103.214.201.216:%s\n", PORT);
-    printf("Serving files from ./static/\n");
-
-    while (1) {
-        struct sockaddr_storage their_addr;
-        socklen_t sin_size = sizeof(their_addr);
-        char s[INET6_ADDRSTRLEN];
-
-        int client_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
-        if (client_fd == -1) {
-            perror("accept");
-            continue;
-        }
-
-        inet_ntop(their_addr.ss_family,
-                 get_in_addr((struct sockaddr *)&their_addr),
-                 s, sizeof(s));
-        printf("Connection from %s\n", s);
-
-        if (!fork()) { // Child process
-            close(sockfd);
-            handle_client_data(client_fd);
-            exit(0);
-        }
-        close(client_fd);
-    }
-
-    close(sockfd);
-    return 0;
 }

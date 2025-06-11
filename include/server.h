@@ -1,3 +1,6 @@
+#ifndef SERVER_H
+#define SERVER_H
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +17,8 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <time.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #define PORT "3490"
 #define BACKLOG 10
@@ -21,6 +26,9 @@
 #define MAX_HEADERS 20
 #define MAX_HEADER_SIZE 1024
 #define BUF_SIZE 8192
+
+// --- SSL/TLS Global Variables ---
+extern SSL_CTX *ssl_ctx;
 
 typedef struct {
     char method[16];
@@ -44,11 +52,15 @@ int sendall(int fd, char *buf, int *len);
 void add_to_pfds(struct pollfd *pfds[], int newfd, int *fd_count, int *fd_size);
 void del_from_pfds(struct pollfd pfds[], int i, int *fd_count);
 const char* get_mime_type(const char *path);
+int setup_server_socket();
 int parse_http_request(const char *req, http_request *header);
 void add_response_header(http_response *res, const char *name, const char *value);
 void init_response_header(http_response *res, int status_code, const char *status_text);
 void build_response_header(http_response *res, char *buf, size_t buf_size);
-void send_http_response(int client_fd, http_response *res, const char *body);
-void handle_get(int client_fd, http_request *header);
+void send_http_response(SSL *ssl, http_response *res, const char *body);
+void send_err(SSL *ssl, int status_code, const char *text);
+void handle_get(SSL *ssl, http_request *req);
+void handle_client_data(int client_fd);
 const char *get_content_type(const char *path);
-void send_err(int client_fd, int status_code, const char *text);
+
+#endif // !SERVER_H

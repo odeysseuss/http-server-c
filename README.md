@@ -9,3 +9,7 @@ Key features
 - Process isolation with `fork()`
 - Chunked file transfer with 8KB buffer
 - Connection reuse
+
+BTW, the browser does not recognize the ssl cert as it's a self signed cert           
+so it will show an error. But it's not actually a bug in the code or the browser.          
+For production use we need to implement certs that the browser recognizes.
