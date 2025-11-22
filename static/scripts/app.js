@@ -41,7 +41,7 @@ applyTheme(storedTheme);
 
 const fetchData = async () => {
   try {
-    const res = await fetch("data.json");
+    const res = await fetch("../assets/data.json");
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }

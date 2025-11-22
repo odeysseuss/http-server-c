@@ -1,1 +1,4 @@
 ssl/
+bin/
+certificate.pem
+private.key
